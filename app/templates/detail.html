@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ event.title }}</title>
+  <style>
+    body { margin:0; font-family:Inter,"Microsoft YaHei",sans-serif; background:#0b1018; color:#e8edf5; }
+    main { max-width:900px; margin:auto; padding:32px 20px 60px; }
+    a { color:#68a5ff; } .back { text-decoration:none; }
+    .panel { margin-top:18px; padding:20px; background:#131b27; border:1px solid #263244; border-radius:12px; }
+    .meta { color:#8fa0b7; } li { margin:8px 0; } h1 { line-height:1.35; }
+    .badge { display:inline-block; padding:4px 9px; border-radius:999px; background:#233047; margin-right:6px; }
+  </style>
+</head>
+<body><main>
+  <a class="back" href="/">← 返回情报列表</a>
+  <h1>{{ event.title }}</h1>
+  <div><span class="badge">{{ event.alert_level }}</span><span class="badge">{{ event.event_type }}</span><span class="badge">评分 {{ event.importance_score }}</span></div>
+  <section class="panel">
+    <h2>市场判断</h2><p>{{ event.summary }}</p>
+    <p class="meta">方向 {{ event.direction }} · 强度 {{ event.impact_strength }}/5 · {{ event.time_horizon }} · 置信度 {{ '%.0f'|format(event.confidence * 100) }}%</p>
+    <p>市场逻辑：{{ event.market_mechanisms|join('、') or '待确认' }}</p>
+  </section>
+  <section class="panel"><h2>影响范围</h2><ul>{% for asset in event.affected_assets %}<li><strong>{{ asset.category }}</strong> · {{ asset.direction }}：{{ asset.reason }}</li>{% else %}<li>待确认</li>{% endfor %}</ul></section>
+  <section class="panel"><h2>已核验事实</h2><ul>{% for fact in event.verified_facts %}<li>{{ fact }}</li>{% else %}<li>暂无</li>{% endfor %}</ul></section>
+  <section class="panel"><h2>不确定性</h2><ul>{% for item in event.uncertainties %}<li>{{ item }}</li>{% else %}<li>暂无</li>{% endfor %}</ul></section>
+  <section class="panel"><h2>证据链</h2><ul>{% for link in event.evidence %}<li><a href="{{ link.raw_item.canonical_url }}" rel="noopener noreferrer" target="_blank">{{ link.raw_item.title }}</a> · {{ link.raw_item.source.name }}</li>{% endfor %}</ul></section>
+</main></body></html>
+

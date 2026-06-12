@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CS2 饰品趋势情报</title>
+  <style>
+    :root { color-scheme: dark; --bg:#0b1018; --panel:#131b27; --line:#263244; --text:#e8edf5; --muted:#8fa0b7; --red:#ff5d69; --orange:#f3a847; --blue:#68a5ff; }
+    * { box-sizing: border-box; }
+    body { margin:0; font-family:Inter,"Microsoft YaHei",sans-serif; background:var(--bg); color:var(--text); }
+    main { max-width:1180px; margin:auto; padding:32px 20px 60px; }
+    h1 { margin:0 0 6px; font-size:28px; }
+    .subtitle,.meta,.empty { color:var(--muted); }
+    .grid { display:grid; grid-template-columns:minmax(0,3fr) minmax(260px,1fr); gap:20px; margin-top:24px; }
+    .panel,.card { background:var(--panel); border:1px solid var(--line); border-radius:12px; }
+    .filters { display:flex; gap:10px; flex-wrap:wrap; padding:14px; margin-bottom:14px; }
+    select,input,button { background:#0d141f; color:var(--text); border:1px solid var(--line); border-radius:8px; padding:9px 11px; }
+    button { cursor:pointer; border-color:#3e6db0; }
+    .card { padding:18px; margin-bottom:12px; }
+    .card h2 { margin:8px 0; font-size:18px; }
+    .card a { color:var(--text); text-decoration:none; }
+    .card a:hover { color:var(--blue); }
+    .badge { display:inline-block; font-size:12px; font-weight:700; padding:4px 8px; border-radius:999px; background:#233047; }
+    .P0 { background:rgba(255,93,105,.18); color:var(--red); }
+    .P1 { background:rgba(243,168,71,.18); color:var(--orange); }
+    .score { float:right; color:var(--muted); }
+    .source { padding:12px 14px; border-bottom:1px solid var(--line); }
+    .source:last-child { border-bottom:0; }
+    .ok { color:#6bd39a; } .error { color:var(--red); }
+    @media (max-width:800px) { .grid { grid-template-columns:1fr; } }
+  </style>
+</head>
+<body>
+<main>
+  <h1>CS2 饰品趋势情报</h1>
+  <div class="subtitle">高价值信息监控与市场影响判断，不代表投资建议</div>
+  <div class="grid">
+    <section>
+      <form class="filters panel" method="get">
+        <select name="alert_level">
+          <option value="">全部等级</option>
+          {% for value in ['P0','P1','P2','P3'] %}<option value="{{ value }}" {% if filters.alert_level == value %}selected{% endif %}>{{ value }}</option>{% endfor %}
+        </select>
+        <input name="event_type" value="{{ filters.event_type }}" placeholder="事件类型">
+        <select name="direction">
+          <option value="">全部方向</option>
+          {% for value in ['利多','利空','混合','中性','不确定'] %}<option value="{{ value }}" {% if filters.direction == value %}selected{% endif %}>{{ value }}</option>{% endfor %}
+        </select>
+        <button type="submit">筛选</button>
+      </form>
+      {% for event in events %}
+      <article class="card">
+        <span class="badge {{ event.alert_level }}">{{ event.alert_level }}</span>
+        <span class="badge">{{ event.event_type }}</span>
+        <span class="score">评分 {{ event.importance_score }}</span>
+        <h2><a href="/events/{{ event.id }}">{{ event.title }}</a></h2>
+        <p>{{ event.summary }}</p>
+        <div class="meta">{{ event.direction }} · 强度 {{ event.impact_strength }}/5 · {{ event.time_horizon }} · 置信度 {{ '%.0f'|format(event.confidence * 100) }}%</div>
+      </article>
+      {% else %}<div class="card empty">暂无符合条件的情报。</div>{% endfor %}
+    </section>
+    <aside class="panel">
+      <div class="source"><strong>来源健康状态</strong></div>
+      {% for source in sources %}
+      <div class="source">
+        <div>{{ source.name }}</div>
+        {% if source.last_error %}<small class="error">异常：{{ source.last_error[:100] }}</small>
+        {% elif source.last_success_at %}<small class="ok">正常 · {{ source.last_success_at.strftime('%m-%d %H:%M') }}</small>
+        {% elif source.last_checked_at %}<small class="error">异常：尚未成功完成首次采集</small>
+        {% else %}<small class="meta">等待首次采集</small>{% endif %}
+      </div>
+      {% endfor %}
+    </aside>
+  </div>
+</main>
+</body>
+</html>
