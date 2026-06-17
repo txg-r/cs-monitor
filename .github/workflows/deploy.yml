@@ -1,0 +1,165 @@
+name: Deploy to Google Compute Engine
+
+on:
+  push:
+    branches: ["main"]
+  workflow_dispatch:
+
+concurrency:
+  group: production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  APP_DIR: /opt/cs-monitor
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Run tests
+        run: pytest -q
+
+      - name: Resolve image name
+        run: |
+          # GHCR 要求镜像名小写；GitHub 仓库名可能包含大写，所以这里统一转换。
+          echo "IMAGE_REPO=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_ENV"
+          echo "IMAGE_TAG=${GITHUB_SHA}" >> "$GITHUB_ENV"
+
+      - name: Validate required secrets
+        env:
+          GCE_HOST: ${{ secrets.GCE_HOST }}
+          GCE_USER: ${{ secrets.GCE_USER }}
+          GCE_SSH_PRIVATE_KEY: ${{ secrets.GCE_SSH_PRIVATE_KEY }}
+          GHCR_USERNAME: ${{ secrets.GHCR_USERNAME }}
+          GHCR_READ_TOKEN: ${{ secrets.GHCR_READ_TOKEN }}
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          ADMIN_TOKEN: ${{ secrets.ADMIN_TOKEN }}
+        run: |
+          missing=0
+          for name in GCE_HOST GCE_USER GCE_SSH_PRIVATE_KEY GHCR_USERNAME GHCR_READ_TOKEN POSTGRES_PASSWORD ADMIN_TOKEN; do
+            if [ -z "${!name}" ]; then
+              echo "::error::Missing required GitHub secret: ${name}"
+              missing=1
+            fi
+          done
+          exit "$missing"
+
+      - name: Login to GHCR for push
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Build and push image
+        run: |
+          docker build --pull \
+            -t "${IMAGE_REPO}:${IMAGE_TAG}" \
+            -t "${IMAGE_REPO}:latest" \
+            .
+          docker push "${IMAGE_REPO}:${IMAGE_TAG}"
+          docker push "${IMAGE_REPO}:latest"
+
+      - name: Prepare deployment files
+        env:
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          ADMIN_TOKEN: ${{ secrets.ADMIN_TOKEN }}
+          AI_ENABLED: ${{ secrets.AI_ENABLED }}
+          AI_BASE_URL: ${{ secrets.AI_BASE_URL }}
+          AI_API_KEY: ${{ secrets.AI_API_KEY }}
+          AI_MODEL: ${{ secrets.AI_MODEL }}
+          FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
+          FEISHU_SECRET: ${{ secrets.FEISHU_SECRET }}
+          FEISHU_STARTUP_CHECK_ENABLED: ${{ secrets.FEISHU_STARTUP_CHECK_ENABLED }}
+          CONTACT_EMAIL: ${{ secrets.CONTACT_EMAIL }}
+          LIQUIPEDIA_ENABLED: ${{ secrets.LIQUIPEDIA_ENABLED }}
+          YOUTUBE_CHANNEL_IDS: ${{ secrets.YOUTUBE_CHANNEL_IDS }}
+          REDDIT_SUBREDDITS: ${{ secrets.REDDIT_SUBREDDITS }}
+          REDDIT_CLIENT_ID: ${{ secrets.REDDIT_CLIENT_ID }}
+          REDDIT_CLIENT_SECRET: ${{ secrets.REDDIT_CLIENT_SECRET }}
+          REDDIT_USERNAME: ${{ secrets.REDDIT_USERNAME }}
+          REDDIT_PASSWORD: ${{ secrets.REDDIT_PASSWORD }}
+        run: |
+          # 部署环境变量只在 CI 运行时生成，不提交到仓库。
+          # printf 能避免 shell 展开密钥中的特殊字符；密钥本身不应包含换行。
+          {
+            printf 'APP_IMAGE=%s:%s\n' "$IMAGE_REPO" "$IMAGE_TAG"
+            printf 'POSTGRES_PASSWORD=%s\n' "$POSTGRES_PASSWORD"
+            printf 'LOG_LEVEL=%s\n' "INFO"
+            printf 'LOG_TO_FILE=%s\n' "true"
+            printf 'LOG_FILE_PATH=%s\n' "logs/app.log"
+            printf 'SCHEDULER_ENABLED=%s\n' "true"
+            printf 'SOURCE_POLL_TICK_SECONDS=%s\n' "60"
+            printf 'ADMIN_TOKEN=%s\n' "$ADMIN_TOKEN"
+            printf 'CONTACT_EMAIL=%s\n' "$CONTACT_EMAIL"
+            printf 'AI_ENABLED=%s\n' "${AI_ENABLED:-false}"
+            printf 'AI_BASE_URL=%s\n' "${AI_BASE_URL:-https://api.openai.com/v1}"
+            printf 'AI_API_KEY=%s\n' "$AI_API_KEY"
+            printf 'AI_MODEL=%s\n' "${AI_MODEL:-gpt-4.1-mini}"
+            printf 'FEISHU_WEBHOOK_URL=%s\n' "$FEISHU_WEBHOOK_URL"
+            printf 'FEISHU_SECRET=%s\n' "$FEISHU_SECRET"
+            printf 'FEISHU_STARTUP_CHECK_ENABLED=%s\n' "${FEISHU_STARTUP_CHECK_ENABLED:-true}"
+            printf 'LIQUIPEDIA_ENABLED=%s\n' "${LIQUIPEDIA_ENABLED:-false}"
+            printf 'YOUTUBE_CHANNEL_IDS=%s\n' "$YOUTUBE_CHANNEL_IDS"
+            printf 'REDDIT_SUBREDDITS=%s\n' "${REDDIT_SUBREDDITS:-csgomarketforum,GlobalOffensive}"
+            printf 'REDDIT_CLIENT_ID=%s\n' "$REDDIT_CLIENT_ID"
+            printf 'REDDIT_CLIENT_SECRET=%s\n' "$REDDIT_CLIENT_SECRET"
+            printf 'REDDIT_USERNAME=%s\n' "$REDDIT_USERNAME"
+            printf 'REDDIT_PASSWORD=%s\n' "$REDDIT_PASSWORD"
+          } > cs-monitor.env
+
+      - name: Prepare SSH
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "${{ secrets.GCE_SSH_PRIVATE_KEY }}" > ~/.ssh/gce_deploy_key
+          chmod 600 ~/.ssh/gce_deploy_key
+          ssh-keyscan -H "${{ secrets.GCE_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Upload compose and env
+        run: |
+          scp -i ~/.ssh/gce_deploy_key compose.prod.yaml cs-monitor.env \
+            "${{ secrets.GCE_USER }}@${{ secrets.GCE_HOST }}:/tmp/"
+
+      - name: Login VM to GHCR
+        env:
+          GHCR_USERNAME: ${{ secrets.GHCR_USERNAME }}
+          GHCR_READ_TOKEN: ${{ secrets.GHCR_READ_TOKEN }}
+        run: |
+          printf '%s' "$GHCR_READ_TOKEN" | ssh -i ~/.ssh/gce_deploy_key "${{ secrets.GCE_USER }}@${{ secrets.GCE_HOST }}" \
+            "docker login ghcr.io -u '${GHCR_USERNAME}' --password-stdin"
+
+      - name: Deploy on VM
+        run: |
+          ssh -i ~/.ssh/gce_deploy_key "${{ secrets.GCE_USER }}@${{ secrets.GCE_HOST }}" \
+            "APP_DIR='${APP_DIR}' bash -s" <<'REMOTE'
+          set -euo pipefail
+
+          mkdir -p "$APP_DIR"
+          mv /tmp/compose.prod.yaml "$APP_DIR/compose.prod.yaml"
+          mv /tmp/cs-monitor.env "$APP_DIR/.env"
+          chmod 600 "$APP_DIR/.env"
+
+          cd "$APP_DIR"
+          docker compose -f compose.prod.yaml pull app
+          docker compose -f compose.prod.yaml up -d
+          docker image prune -f
+
+          # 健康检查放在部署机执行，确认容器网络和应用启动都正常。
+          curl -fsS --retry 10 --retry-delay 3 http://127.0.0.1:8000/health
+          REMOTE

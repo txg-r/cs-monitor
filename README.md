@@ -59,10 +59,52 @@ docker compose up --build -d
 
 调度器是进程内实现，容器必须保持单 worker。需要水平扩容时，应先把调度任务拆为独立 worker 或增加分布式锁。
 
+## Google Cloud 自动部署
+
+生产部署使用 GitHub Actions 构建镜像并推送到 GHCR，然后通过 SSH 登录 Google Compute Engine VM 执行 Docker Compose 更新。
+
+一次性初始化 VM：
+
+```bash
+sudo apt-get update
+sudo apt-get install -y git
+git clone https://github.com/<owner>/<repo>.git /tmp/cs-monitor
+cd /tmp/cs-monitor
+bash deploy/bootstrap-gce.sh
+```
+
+初始化后重新登录 SSH，让 docker 用户组权限生效。随后在 Google Cloud 防火墙中开放 TCP `8000`。
+
+GitHub 仓库需要配置以下 Secrets：
+
+- `GCE_HOST`：VM 公网 IP。
+- `GCE_USER`：SSH 用户。
+- `GCE_SSH_PRIVATE_KEY`：部署用 SSH 私钥。
+- `GHCR_USERNAME`：GitHub 用户名或组织名。
+- `GHCR_READ_TOKEN`：带 `read:packages` 权限的 PAT，供 VM 拉取 GHCR 私有镜像。
+- `POSTGRES_PASSWORD`、`ADMIN_TOKEN`、AI、飞书、YouTube、Reddit 等运行时配置。
+
+推送到 `main` 或手动运行 `Deploy to Google Compute Engine` workflow 后，GitHub Actions 会：
+
+1. 运行测试。
+2. 构建并推送 `ghcr.io/<owner>/<repo>:<sha>` 和 `latest`。
+3. 上传 `compose.prod.yaml` 和生产 `.env` 到 `/opt/cs-monitor`。
+4. 在 VM 上拉取镜像并执行 `docker compose -f compose.prod.yaml up -d`。
+5. 调用 `http://127.0.0.1:8000/health` 做部署后健康检查。
+
+部署后查看服务：
+
+```bash
+cd /opt/cs-monitor
+docker compose -f compose.prod.yaml ps
+docker compose -f compose.prod.yaml logs -f app
+```
+
 ## 核心配置
 
 - `AI_ENABLED=true` 后配置 `AI_BASE_URL`、`AI_API_KEY`、`AI_MODEL`。
 - `FEISHU_WEBHOOK_URL` 配置群机器人；启用签名校验时同时设置 `FEISHU_SECRET`。
+- `FEISHU_STARTUP_CHECK_ENABLED=true` 时，应用每次启动后都会发送飞书通道自检消息；不需要启动提示可设为 `false`。
 - `YOUTUBE_CHANNEL_IDS` 填写经过人工筛选的频道 ID，多个值用逗号分隔。
 - `LIQUIPEDIA_ENABLED=true` 前必须设置真实 `CONTACT_EMAIL`，并遵守其 API 使用和限流要求。
 - Reddit 仅在获得 API 权限后填写 OAuth 配置；系统不会通过匿名接口绕过授权。

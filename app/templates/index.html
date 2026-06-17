@@ -65,7 +65,7 @@
       <div class="source">
         <div>{{ source.name }}</div>
         {% if source.last_error %}<small class="error">异常：{{ source.last_error[:100] }}</small>
-        {% elif source.last_success_at %}<small class="ok">正常 · {{ source.last_success_at.strftime('%m-%d %H:%M') }}</small>
+        {% elif source.last_success_at %}<small class="ok">正常 · {{ source.last_success_at|local_time('%m-%d %H:%M') }}</small>
         {% elif source.last_checked_at %}<small class="error">异常：尚未成功完成首次采集</small>
         {% else %}<small class="meta">等待首次采集</small>{% endif %}
       </div>

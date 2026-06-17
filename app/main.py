@@ -8,6 +8,7 @@ from app.config import get_settings
 from app.database import SessionLocal, init_db
 from app.logging_config import configure_logging
 from app.scheduler import SchedulerService
+from app.services.notifier import FeishuNotifier
 from app.services.seeding import seed_sources
 
 
@@ -25,6 +26,8 @@ async def lifespan(_: FastAPI):
     init_db()
     with SessionLocal() as db:
         seed_sources(db, settings)
+        if settings.feishu_startup_check_enabled and settings.scheduler_enabled:
+            await FeishuNotifier(settings).send_startup_check(db)
     if settings.scheduler_enabled:
         scheduler_service.start()
     try:

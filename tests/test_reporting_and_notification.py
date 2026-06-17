@@ -47,6 +47,21 @@ async def test_notification_outbox_is_idempotent_without_webhook(db):
     assert db.scalar(select(func.count()).select_from(Notification)) == 1
 
 
+@pytest.mark.asyncio
+async def test_startup_check_records_each_start_without_webhook(db):
+    """验证启动自检每次启动都会记录一条通知，用来确认每次进程启动后的推送通道状态。"""
+
+    notifier = FeishuNotifier(Settings(feishu_webhook_url=None, scheduler_enabled=False))
+
+    assert await notifier.send_startup_check(db) is False
+    assert await notifier.send_startup_check(db) is False
+
+    notifications = db.scalars(select(Notification).where(Notification.kind == "startup_check")).all()
+    assert len(notifications) == 2
+    assert {notification.status for notification in notifications} == {"disabled"}
+    assert notifications[0].dedup_key != notifications[1].dedup_key
+
+
 def test_daily_report_contains_events_and_source_gap(db):
     """验证日报同时展示重要事件和采集异常，防止用户把数据缺口误认为市场平静。"""
 
@@ -56,4 +71,3 @@ def test_daily_report_contains_events_and_source_gap(db):
     report = DailyReportService(Settings(scheduler_enabled=False)).generate(db)
     assert "新箱子发布" in report.content_markdown
     assert "采集缺口：异常源" in report.content_markdown
-

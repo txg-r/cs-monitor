@@ -45,6 +45,7 @@ class Settings(BaseSettings):
 
     feishu_webhook_url: str | None = None
     feishu_secret: str | None = None
+    feishu_startup_check_enabled: bool = True
 
     liquipedia_enabled: bool = False
     liquipedia_api_url: str = "https://liquipedia.net/counterstrike/api.php"

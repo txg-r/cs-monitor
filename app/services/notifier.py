@@ -3,6 +3,8 @@ import hashlib
 import hmac
 import logging
 import time
+from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 import httpx
 from sqlalchemy import select
@@ -127,6 +129,46 @@ class FeishuNotifier:
         for notification in pending:
             sent += int(await self._send(db, notification))
         return sent
+
+    async def send_startup_check(self, db: Session) -> bool:
+        """应用启动时发送飞书通道自检消息。
+
+        启动自检的语义是“这一次进程启动后的通知通道是否可用”，所以每次启动都应该发送。
+        这里仍然写入发件箱表，是为了保留审计记录和失败原因；但 dedup_key 使用随机后缀，避免复用事件通知的幂等策略。
+        """
+
+        local_now = utc_now().astimezone(ZoneInfo(self.settings.timezone))
+        dedup_key = f"startup-check:{local_now.strftime('%Y%m%dT%H%M%S')}:{uuid4().hex}"
+        payload = self._sign(
+            {
+                "msg_type": "text",
+                "content": {
+                    "text": (
+                        "CS2 情报系统启动自检\n"
+                        f"时间：{local_now.strftime('%Y-%m-%d %H:%M:%S %Z')}\n"
+                        "结果：飞书推送通道可用。"
+                    )
+                },
+            }
+        )
+        notification = Notification(
+            kind="startup_check",
+            dedup_key=dedup_key,
+            status="pending" if self.settings.feishu_webhook_url else "disabled",
+            payload=payload,
+        )
+        db.add(notification)
+        try:
+            db.commit()
+        except IntegrityError:
+            db.rollback()
+            logger.info("启动自检通知被幂等去重：幂等键=%s", dedup_key)
+            return False
+        if not self.settings.feishu_webhook_url:
+            logger.info("启动自检未发送：未配置飞书 Webhook")
+            return False
+        logger.info("开始发送启动自检通知：幂等键=%s", dedup_key)
+        return await self._send(db, notification)
 
     async def send_report(self, db: Session, report_id: int, markdown: str) -> bool:
         """发送日报并复用发件箱幂等机制。"""
