@@ -164,6 +164,38 @@ jobs:
           docker compose -f compose.prod.yaml up -d
           docker image prune -f
 
-          # 健康检查放在部署机执行，确认容器网络和应用启动都正常。
-          curl -fsS --retry 10 --retry-delay 3 http://127.0.0.1:8000/health
+          # 应用容器启动完成不代表业务已经可访问；首次部署时数据库初始化、依赖连接、
+          # FastAPI 启动都可能让 8000 端口短暂 reset。这里等待 Docker healthcheck
+          # 进入 healthy 后再访问 /health，避免部署成功但验收过早导致 Actions 误判失败。
+          APP_CONTAINER="$(docker compose -f compose.prod.yaml ps -q app)"
+          if [ -z "$APP_CONTAINER" ]; then
+            echo "未找到 app 容器，部署流程异常。"
+            docker compose -f compose.prod.yaml ps
+            exit 1
+          fi
+
+          for i in $(seq 1 60); do
+            STATUS="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$APP_CONTAINER")"
+            echo "第 ${i}/60 次检查应用健康状态：${STATUS}"
+
+            if [ "$STATUS" = "healthy" ]; then
+              echo "应用已进入 healthy 状态，开始访问 /health 做最终确认。"
+              curl -fsS http://127.0.0.1:8000/health
+              exit 0
+            fi
+
+            # 状态为 unhealthy 时立即打印最近日志，方便从 Actions 页面直接定位原因；
+            # starting/running 阶段只等待，减少正常启动过程中的日志噪音。
+            if [ "$STATUS" = "unhealthy" ]; then
+              echo "应用当前为 unhealthy，输出最近 80 行日志辅助排查。"
+              docker compose -f compose.prod.yaml logs --tail=80 app
+            fi
+
+            sleep 5
+          done
+
+          echo "应用未在 300 秒内进入 healthy 状态，输出容器状态和最近日志。"
+          docker compose -f compose.prod.yaml ps
+          docker compose -f compose.prod.yaml logs --tail=120 app
+          exit 1
           REMOTE
